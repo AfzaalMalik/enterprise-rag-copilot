@@ -39,10 +39,50 @@ from voice_gemini import synthesize_speech_wav, transcribe_audio_bytes
 # Load environment variables
 load_dotenv()
 
-LIVE_HOST = os.getenv("LIVE_HOST", "127.0.0.1")
-LIVE_PORT = int(os.getenv("LIVE_PORT", "8765"))
-LIVE_URL = f"http://{LIVE_HOST}:{LIVE_PORT}/"
 ROOT_DIR = Path(__file__).resolve().parent
+
+
+def _secret_or_env(name: str, default: str = "") -> str:
+    """Read Streamlit secret or process env (call only after set_page_config)."""
+    try:
+        val = st.secrets.get(name, "")
+        if val:
+            return str(val)
+    except Exception:
+        pass
+    return os.getenv(name, default) or default
+
+
+def _live_host() -> str:
+    return _secret_or_env("LIVE_HOST", "127.0.0.1")
+
+
+def _live_port() -> int:
+    return int(_secret_or_env("LIVE_PORT", "8765") or "8765")
+
+
+def _live_ws_url_setting() -> str:
+    # Optional public WebSocket for Cloud (e.g. wss://your-live-server.example/ws/live)
+    return _secret_or_env("LIVE_WS_URL", "")
+
+
+def _live_http_url() -> str:
+    return _secret_or_env("LIVE_HTTP_URL", "") or f"http://{_live_host()}:{_live_port()}/"
+
+
+def _is_local_live_target() -> bool:
+    """True when Live Talk targets this machine (localhost)."""
+    ws = _live_ws_url_setting()
+    if ws:
+        return "127.0.0.1" in ws or "localhost" in ws
+    return _live_host() in {"127.0.0.1", "localhost", "::1"}
+
+
+def _resolve_live_ws_url() -> str:
+    ws = _live_ws_url_setting()
+    if ws:
+        return ws
+    return f"ws://{_live_host()}:{_live_port()}/ws/live"
 
 
 def _port_open(host: str, port: int) -> bool:
@@ -54,8 +94,12 @@ def _port_open(host: str, port: int) -> bool:
 
 
 def ensure_live_server() -> tuple[bool, str]:
-    """Start realtime_server.py if needed. Returns (ok, message)."""
-    if _port_open(LIVE_HOST, LIVE_PORT):
+    """Start realtime_server.py if needed (local only). Returns (ok, message)."""
+    if not _is_local_live_target():
+        return True, "Using remote Live Talk server."
+
+    host, port = _live_host(), _live_port()
+    if _port_open(host, port):
         return True, "Live Talk server is already running."
 
     server_script = ROOT_DIR / "realtime_server.py"
@@ -78,7 +122,7 @@ def ensure_live_server() -> tuple[bool, str]:
 
     for _ in range(25):
         time.sleep(0.2)
-        if _port_open(LIVE_HOST, LIVE_PORT):
+        if _port_open(host, port):
             return True, "Live Talk server started."
     return False, "Server process launched but port did not open. Check data/live_server.log."
 
@@ -213,32 +257,19 @@ with st.sidebar:
             st.rerun()
 
     st.subheader("Settings")
-    # Never put the real key into a widget value — that exposes it in the browser.
-    gemini_api_key = ""
-    try:
-        gemini_api_key = (
-            str(st.secrets.get("GEMINI_API_KEY", "") or "")
-            or str(st.secrets.get("GOOGLE_API_KEY", "") or "")
-        )
-    except Exception:
-        pass
-    if not gemini_api_key:
-        gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
-
+    # BYOK: each visitor pastes their own key (never load owner secrets into the UI).
+    gemini_api_key = st.text_input(
+        "Your Gemini API key",
+        type="password",
+        placeholder="Paste your key from Google AI Studio",
+        help="Bring your own key — uses your Gemini quota only. Not stored in our secrets.",
+        key="byok_gemini_key",
+    )
     if gemini_api_key:
-        st.caption("Gemini API key: configured on server (hidden)")
         os.environ["GOOGLE_API_KEY"] = gemini_api_key
+        os.environ["GEMINI_API_KEY"] = gemini_api_key
     else:
-        st.warning("No server API key. Add GEMINI_API_KEY in Streamlit Secrets / .env.")
-        # Local fallback only — starts empty, never pre-filled from secrets.
-        gemini_api_key = st.text_input(
-            "Gemini API key (local only)",
-            type="password",
-            value="",
-            placeholder="Paste key only for local testing",
-        )
-        if gemini_api_key:
-            os.environ["GOOGLE_API_KEY"] = gemini_api_key
+        st.caption("Get a free key: https://aistudio.google.com/apikey")
 
     model_name = st.selectbox(
         "Model",
@@ -297,14 +328,25 @@ with st.sidebar:
     )
 
     st.divider()
-    live_up = _port_open(LIVE_HOST, LIVE_PORT)
-    st.caption("Live Talk server: " + ("online" if live_up else "offline"))
-    if st.button("Start Live server", use_container_width=True, key="start_live_server"):
-        ok, msg = ensure_live_server()
-        (st.success if ok else st.error)(msg)
-        if ok:
-            st.rerun()
-    st.link_button("Open Live Talk", LIVE_URL, use_container_width=True, disabled=not live_up)
+    st.caption("Live Talk")
+    if _is_local_live_target():
+        live_up = _port_open(_live_host(), _live_port())
+        st.caption("Local server: " + ("online" if live_up else "offline"))
+        if st.button("Start Live server", use_container_width=True, key="start_live_server"):
+            ok, msg = ensure_live_server()
+            (st.success if ok else st.error)(msg)
+            if ok:
+                st.rerun()
+        st.link_button(
+            "Open Live Talk",
+            _live_http_url(),
+            use_container_width=True,
+            disabled=not live_up,
+        )
+    else:
+        st.caption("Remote Live WS configured.")
+        st.link_button("Open Live Talk", _live_http_url(), use_container_width=True)
+    st.caption("On Streamlit Cloud, Live Talk needs a public LIVE_WS_URL (or run the app locally).")
 
 # ----------------- PDF VECTORSTORE INDEXING -----------------
 if uploaded_file is not None:
@@ -448,17 +490,37 @@ for msg in current_chat["messages"]:
 # ----------------- LIVE TALK DIALOG (compact embedded window) -----------------
 @st.dialog("Live Talk")
 def live_talk_dialog() -> None:
-    if not _port_open(LIVE_HOST, LIVE_PORT):
-        with st.spinner("Starting Live server…"):
-            ok, msg = ensure_live_server()
-        if not ok:
-            st.error(msg)
-            if st.button("Retry", use_container_width=True, key="dialog_retry_live"):
-                st.rerun()
-            return
+    ws_url = _resolve_live_ws_url()
+
+    if _is_local_live_target():
+        if not _port_open(_live_host(), _live_port()):
+            with st.spinner("Starting Live server…"):
+                ok, msg = ensure_live_server()
+            if not ok:
+                st.error(msg)
+                st.info(
+                    "Live Talk needs the local realtime server. "
+                    "On Streamlit Cloud this cannot use localhost — "
+                    "run `streamlit run rag.py` on your PC, or host "
+                    "`realtime_server.py` and set secret LIVE_WS_URL "
+                    "(wss://…/ws/live)."
+                )
+                if st.button("Retry", use_container_width=True, key="dialog_retry_live"):
+                    st.rerun()
+                return
+    elif not _live_ws_url_setting():
+        st.warning(
+            "Live Talk is not available on this Cloud deploy yet.\n\n"
+            "**Why:** the browser must open a WebSocket. "
+            "`ws://127.0.0.1` only works on your own computer.\n\n"
+            "**Options:**\n"
+            "1. Run Groundly locally (`streamlit run rag.py`), or\n"
+            "2. Host `realtime_server.py` (Railway/Render/Fly) and add "
+            "Streamlit secret `LIVE_WS_URL = \"wss://your-host/ws/live\"`."
+        )
+        return
 
     html = (ROOT_DIR / "live_talk.html").read_text(encoding="utf-8")
-    ws_url = f"ws://{LIVE_HOST}:{LIVE_PORT}/ws/live"
     html = html.replace("__WS_URL__", ws_url).replace("__AUTO_START__", "1")
     components.html(html, height=300, scrolling=False)
 
