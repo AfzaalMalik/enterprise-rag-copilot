@@ -213,15 +213,32 @@ with st.sidebar:
             st.rerun()
 
     st.subheader("Settings")
-    secret_key = ""
+    # Never put the real key into a widget value — that exposes it in the browser.
+    gemini_api_key = ""
     try:
-        secret_key = st.secrets.get("GEMINI_API_KEY", "") or st.secrets.get("GOOGLE_API_KEY", "")
+        gemini_api_key = (
+            str(st.secrets.get("GEMINI_API_KEY", "") or "")
+            or str(st.secrets.get("GOOGLE_API_KEY", "") or "")
+        )
     except Exception:
         pass
-    default_key = secret_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
-    gemini_api_key = st.text_input("Gemini API key", type="password", value=default_key)
+    if not gemini_api_key:
+        gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
+
     if gemini_api_key:
+        st.caption("Gemini API key: configured on server (hidden)")
         os.environ["GOOGLE_API_KEY"] = gemini_api_key
+    else:
+        st.warning("No server API key. Add GEMINI_API_KEY in Streamlit Secrets / .env.")
+        # Local fallback only — starts empty, never pre-filled from secrets.
+        gemini_api_key = st.text_input(
+            "Gemini API key (local only)",
+            type="password",
+            value="",
+            placeholder="Paste key only for local testing",
+        )
+        if gemini_api_key:
+            os.environ["GOOGLE_API_KEY"] = gemini_api_key
 
     model_name = st.selectbox(
         "Model",
