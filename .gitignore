@@ -31,6 +31,9 @@ wheels/
 # Streamlit
 .streamlit/secrets.toml
 
+# Local RAG index shared with Voice Agent
+data/
+
 # IDE & OS
 .vscode/
 .idea/

@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live</title>
+  <style>
+    :root {
+      --bg: #121311;
+      --text: #F1F3EB;
+      --muted: #9EA97E;
+      --accent: #8DD515;
+      --danger: #fb7185;
+      --level: 0;
+      --ai-level: 0;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: Manrope, system-ui, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    .stage {
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto minmax(140px, 1fr) auto;
+      gap: 8px;
+      padding: 10px;
+    }
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid rgba(158,169,126,0.28);
+      color: var(--muted);
+      font-size: 0.72rem;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #64748b; }
+    .dot.live { background: var(--accent); }
+    .dot.err { background: var(--danger); }
+
+    .viz {
+      position: relative;
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid rgba(158,169,126,0.22);
+      background: radial-gradient(circle at 50% 55%, rgba(141,213,21,0.12), transparent 45%), #0c0d0b;
+      min-height: 140px;
+    }
+    .bubble {
+      position: absolute;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), rgba(141,213,21,0.12) 45%, transparent 72%);
+      border: 1px solid rgba(255,255,255,0.1);
+      animation: floatEasy var(--dur, 7s) ease-in-out infinite;
+      animation-delay: var(--delay, 0s);
+      opacity: 0.5;
+      transform: scale(calc(0.75 + var(--level) * 0.9 + var(--ai-level) * 0.5));
+      transition: transform 80ms linear, opacity 120ms linear;
+    }
+    @keyframes floatEasy {
+      0%, 100% { translate: 0 0; }
+      50% { translate: var(--dx, 10px) var(--dy, -14px); }
+    }
+    .orb-wrap {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+    }
+    .orb {
+      width: clamp(72px, 18vw, 96px);
+      height: clamp(72px, 18vw, 96px);
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 35% 30%, rgba(255,255,255,0.5), transparent 28%),
+        radial-gradient(circle at 50% 55%, rgba(141,213,21,0.95), rgba(40,60,10,0.55) 58%, transparent 78%);
+      box-shadow:
+        0 0 0 calc(8px + var(--level) * 20px) rgba(141,213,21, calc(0.08 + var(--level) * 0.18)),
+        0 0 0 calc(18px + var(--ai-level) * 26px) rgba(202,208,182, calc(0.05 + var(--ai-level) * 0.14));
+      transform: scale(calc(1 + var(--level) * 0.28 + var(--ai-level) * 0.18));
+      transition: transform 70ms linear, box-shadow 70ms linear;
+    }
+    .orb.ai-speaking {
+      background:
+        radial-gradient(circle at 35% 30%, rgba(255,255,255,0.45), transparent 28%),
+        radial-gradient(circle at 50% 55%, rgba(202,208,182,0.95), rgba(60,70,40,0.55) 58%, transparent 78%);
+    }
+    .row { display: flex; gap: 8px; }
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 9px 14px;
+      font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      color: #0F0F0E;
+      background: var(--accent);
+      flex: 1;
+    }
+    button.stop { background: var(--danger); color: #2a0610; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .log {
+      max-height: 56px;
+      overflow: auto;
+      border-radius: 10px;
+      border: 1px solid rgba(158,169,126,0.22);
+      background: rgba(0,0,0,0.28);
+      padding: 6px 8px;
+      font-size: 0.7rem;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      color: #CAD0B6;
+    }
+    @media (max-height: 520px) {
+      .viz { min-height: 110px; }
+      .log { max-height: 40px; }
+      .orb { width: 68px; height: 68px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="stage">
+    <div class="top">
+      <span class="pill"><span id="statusDot" class="dot"></span><span id="statusText">Idle</span></span>
+    </div>
+    <div class="viz" id="viz">
+      <div id="bubbles"></div>
+      <div class="orb-wrap"><div class="orb" id="orb"></div></div>
+    </div>
+    <div>
+      <div class="row">
+        <button id="startBtn">Start</button>
+        <button id="stopBtn" class="stop" disabled>Stop</button>
+      </div>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+
+  <script>
+    const WS_URL = "__WS_URL__";
+    const AUTO_START = "__AUTO_START__" === "1";
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const logEl = document.getElementById("log");
+    const orb = document.getElementById("orb");
+    const bubblesRoot = document.getElementById("bubbles");
+
+    let ws = null, audioCtx = null, processor = null, mediaStream = null;
+    let micAnalyser = null, micData = null, playTime = 0, activeSources = [];
+    let rafId = 0, aiEnergy = 0, userEnergy = 0;
+
+    for (let i = 0; i < 12; i++) {
+      const el = document.createElement("div");
+      el.className = "bubble";
+      const size = 18 + Math.random() * 56;
+      el.style.width = size + "px";
+      el.style.height = size + "px";
+      el.style.left = Math.random() * 90 + "%";
+      el.style.top = Math.random() * 85 + "%";
+      el.style.setProperty("--dur", 5 + Math.random() * 6 + "s");
+      el.style.setProperty("--delay", -Math.random() * 5 + "s");
+      el.style.setProperty("--dx", (Math.random() * 28 - 14) + "px");
+      el.style.setProperty("--dy", (Math.random() * -28 - 6) + "px");
+      bubblesRoot.appendChild(el);
+    }
+    const bubbles = [...bubblesRoot.children];
+
+    function setStatus(text, mode) {
+      statusText.textContent = text;
+      statusDot.className = "dot" + (mode === "live" ? " live" : mode === "err" ? " err" : "");
+    }
+    function log(line) {
+      logEl.textContent += line + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    function setLevels(user, ai) {
+      userEnergy = Math.max(0, Math.min(1, user));
+      aiEnergy = Math.max(0, Math.min(1, ai));
+      document.documentElement.style.setProperty("--level", userEnergy.toFixed(3));
+      document.documentElement.style.setProperty("--ai-level", aiEnergy.toFixed(3));
+      orb.classList.toggle("ai-speaking", aiEnergy > 0.08 && aiEnergy >= userEnergy);
+    }
+    function animateFrame() {
+      let u = userEnergy * 0.86;
+      if (micAnalyser && micData) {
+        micAnalyser.getByteFrequencyData(micData);
+        let sum = 0;
+        for (let i = 0; i < micData.length; i++) sum += micData[i];
+        u = Math.max(u, Math.min(1, (sum / micData.length / 255) * 2.2));
+      }
+      aiEnergy *= 0.92;
+      setLevels(u, aiEnergy);
+      const energy = Math.max(u, aiEnergy);
+      bubbles.forEach((b, idx) => {
+        b.style.opacity = String(Math.min(0.9, 0.35 + energy * 0.6 + (idx % 4) * 0.03));
+      });
+      rafId = requestAnimationFrame(animateFrame);
+    }
+    function floatTo16BitPCM(float32Array) {
+      const out = new Int16Array(float32Array.length);
+      for (let i = 0; i < float32Array.length; i++) {
+        let s = Math.max(-1, Math.min(1, float32Array[i]));
+        out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      }
+      return out;
+    }
+    function downsampleTo16k(float32Array, inputRate) {
+      if (inputRate === 16000) return float32Array;
+      const ratio = inputRate / 16000;
+      const newLen = Math.floor(float32Array.length / ratio);
+      const result = new Float32Array(newLen);
+      for (let i = 0; i < newLen; i++) result[i] = float32Array[Math.floor(i * ratio)];
+      return result;
+    }
+    function bytesToBase64(bytes) {
+      let binary = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      return btoa(binary);
+    }
+    function clearPlayback() {
+      activeSources.forEach((s) => { try { s.stop(); } catch (_) {} });
+      activeSources = [];
+      playTime = audioCtx ? audioCtx.currentTime : 0;
+      aiEnergy = 0;
+    }
+    function playPcm16(base64Data) {
+      if (!audioCtx) return;
+      const binary = atob(base64Data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      let peak = 0;
+      for (let i = 0; i < bytes.length; i += 2) {
+        const sample = ((bytes[i + 1] << 8) | bytes[i]) << 16 >> 16;
+        peak = Math.max(peak, Math.abs(sample) / 32768);
+      }
+      aiEnergy = Math.max(aiEnergy, Math.min(1, peak * 1.8));
+      const view = new DataView(bytes.buffer);
+      const samples = bytes.length / 2;
+      const buffer = audioCtx.createBuffer(1, samples, 24000);
+      const channel = buffer.getChannelData(0);
+      for (let i = 0; i < samples; i++) channel[i] = view.getInt16(i * 2, true) / 0x8000;
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioCtx.destination);
+      const startAt = Math.max(playTime, audioCtx.currentTime);
+      source.start(startAt);
+      playTime = startAt + buffer.duration;
+      activeSources.push(source);
+      source.onended = () => { activeSources = activeSources.filter((s) => s !== source); };
+    }
+    async function startMic() {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+      });
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+      const source = audioCtx.createMediaStreamSource(mediaStream);
+      micAnalyser = audioCtx.createAnalyser();
+      micAnalyser.fftSize = 256;
+      micData = new Uint8Array(micAnalyser.frequencyBinCount);
+      source.connect(micAnalyser);
+      processor = audioCtx.createScriptProcessor(4096, 1, 1);
+      processor.onaudioprocess = (e) => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        const input = e.inputBuffer.getChannelData(0);
+        const down = downsampleTo16k(input, audioCtx.sampleRate);
+        const pcm = floatTo16BitPCM(down);
+        ws.send(JSON.stringify({ type: "audio", data: bytesToBase64(new Uint8Array(pcm.buffer)) }));
+      };
+      const mute = audioCtx.createGain();
+      mute.gain.value = 0;
+      source.connect(processor);
+      processor.connect(mute);
+      mute.connect(audioCtx.destination);
+      playTime = audioCtx.currentTime;
+      if (!rafId) rafId = requestAnimationFrame(animateFrame);
+    }
+    function stopAll() {
+      try { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "end" })); } catch (_) {}
+      try { if (ws) ws.close(); } catch (_) {}
+      ws = null;
+      try { if (processor) processor.disconnect(); } catch (_) {}
+      processor = null;
+      micAnalyser = null;
+      micData = null;
+      if (mediaStream) { mediaStream.getTracks().forEach((t) => t.stop()); mediaStream = null; }
+      clearPlayback();
+      try { if (audioCtx) audioCtx.close(); } catch (_) {}
+      audioCtx = null;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      setStatus("Idle", "");
+      setLevels(0, 0);
+    }
+    async function startSession() {
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      setStatus("…", "");
+      logEl.textContent = "";
+      ws = new WebSocket(WS_URL);
+      ws.onopen = async () => {
+        try {
+          await startMic();
+          setStatus("Live", "live");
+        } catch (err) {
+          setStatus("Mic error", "err");
+          log(String(err.message || err));
+          stopAll();
+        }
+      };
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "error") { setStatus("Error", "err"); log(msg.message); }
+        else if (msg.type === "input_transcript") log("You: " + msg.text);
+        else if (msg.type === "output_transcript") log("AI: " + msg.text);
+        else if (msg.type === "interrupted") clearPlayback();
+        else if (msg.type === "audio") playPcm16(msg.data);
+      };
+      ws.onclose = () => { if (startBtn.disabled === false) return; stopAll(); };
+      ws.onerror = () => { setStatus("Error", "err"); log("Server offline"); };
+    }
+    startBtn.onclick = startSession;
+    stopBtn.onclick = stopAll;
+    rafId = requestAnimationFrame(animateFrame);
+    if (AUTO_START) setTimeout(() => startSession(), 250);
+  </script>
+</body>
+</html>

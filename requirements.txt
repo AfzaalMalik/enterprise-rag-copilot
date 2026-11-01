@@ -1,4 +1,4 @@
-streamlit
+streamlit>=1.40.0
 pypdf
 faiss-cpu
 langchain
@@ -6,5 +6,12 @@ langchain-community
 langchain-core
 langchain-text-splitters
 langchain-google-genai
+google-genai
 python-dotenv
 ddgs
+numpy
+fastapi
+uvicorn
+websockets
+# Local CLI only (15/16 voice scripts) — not needed on Streamlit Cloud:
+# sounddevice
